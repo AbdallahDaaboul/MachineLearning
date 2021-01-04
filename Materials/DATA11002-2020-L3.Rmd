@@ -1,0 +1,932 @@
+---
+title: "DATA11002 Introduction to Machine Learning"
+author: "Kai Puolamäki"
+date: "4 November 2020"
+output:
+  beamer_presentation:
+    theme: default
+    colortheme: beaver
+    fonttheme: default
+    keep_tex: true
+    includes:
+      in_header: columns.tex
+  pdf_document:
+    keep_tex: yes
+    includes:
+      in_header: columns.tex
+  html_document:
+    css: columns.css
+  slidy_presentation: default
+  ioslides_presentation: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(cache=TRUE)
+
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\n \\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+```
+
+```{r,hide=TRUE,warning=FALSE,message=FALSE}
+library(RColorBrewer)
+library(tsne)
+library(MASS)
+library(ggplot2)
+library(GGally)
+library(ggfortify)
+library(corrplot)
+library(datasets)
+library(glmnet)
+```
+
+
+
+
+## Announcements
+
+* *Exercise Set 1 (E1)* submission DL will be on **8 November**
+    * please use, e.g., R or Jupyter notebook for Exercise Set 1-3 answers! (you can easily combine include text, mathematical formulas, code, and plots with them)
+    * Please take this [course on R Markdown](https://rmarkdown.rstudio.com/lesson-1.html), if necessary!
+* *Term project groups* of 1-3 students will be formed after **9 November**
+    * you can **form groups of 1-3 students** on your own by **8 November** (you can now submit your groups in Moodle!)
+    * if you don't form a group on your own you will be assigned to groups of (mostly) 3 students in random after 9 November
+    * you can be assigned to a term project group **only after passing E0**
+
+
+
+## Contents of lectures 3-4
+
+* Reminder about generalization error and supervised learning
+* Linear regression
+* Estimating model parameters
+* Estimating loss: evaluation of model performance
+* Controlling the model complexity
+
+# Reminder about generalization error and supervised learning
+
+## Summary of the setting
+
+* *Task* is what an end user actually wants to do.
+* *Computational problem* is a (hopefully general) mathematical definition of the task
+  - usually includes some *performance measure* (to be optimised somehow)
+* *Model* is a (hopefully good) solution to the computational problem.
+* *Data* consists of objects in the domain the user is interested in, with perhaps some additional information attached.
+* *Machine learning algorithm* produces a model based on data.
+* *Features* are how we represent the objects in the domain.
+
+## What we learned about generalisation
+
+
+* *Underfitting*: model too simple or too much data (poor generalization)
+* *Overfitting*: model too complex or too little data (poor generalization)
+* *Inductive bias*: choice of hypothesis space incorporates assumptions (generalization is impossible without any assumptions)
+* Lets now look at *curve fitting* (*regression*):
+
+
+
+
+## Regression
+
+
+
+*Regression* is like classification, except that $y$ is not a discrete variable but a real number.
+
+**Example: ordinary least squares (OLS) linear regression**  
+
+$x$ and $y$ are both real numbers.
+
+$$ D=\{(x_i,y_i)\}_{i=1}^n $$
+
+$$ \hat f_k(X)=\sum\nolimits_{p=0}^k{w_{kp}x^p} $$
+
+$$ {\rm MSE}=\sum\nolimits_{t=1}^n{\left(y_i-\hat f_k(x_i)\right)^2/n} $$
+(MSE = mean squared error)
+
+## Polynomial degree 0
+
+```{r,echo=FALSE}
+set.seed(42)
+
+# f is a stochastic function defined in interval [-1,1].
+# We use f to create the toy data set to be used in the lecture.
+
+regexample <- function() {
+  cols <- c("#E41A1C","#377EB8","#4DAF4A")
+  
+  f <- function(x,noise=.2) sin(pi*x)+noise*rnorm(length(x))
+  
+  data   <- data.frame(x=runif(100,min=-1,max=1))
+  data$y <- f(data$x)
+
+  Str <- 1:7
+  Ste <- 8:100
+
+  flm <- function(k) {
+    lm(if(k==0) formula("y~1") else formula(y~poly(x,k,raw=TRUE)),
+       data[Str,])
+  }
+  
+  fhat <- function(k,lm.k=flm(k)) {
+    function(xnew) {
+      predict(lm.k,newdata=data.frame(x=xnew))
+    }
+  }
+  
+  pform <- function(cc) {
+    s <- sprintf("%.2f",cc[1])
+    if(length(cc)>1) {
+      s <- sprintf("%s%s%.2f*x",s,if(cc[2]<0) "-" else "+",abs(cc[2]))
+    } 
+    if(length(cc)>2) {
+      for(i in 3:length(cc)) {
+        s <- sprintf("%s%s%.2f*x^%d",s,if(cc[i]<0) "-" else "+",abs(cc[i]),i-1)
+      }
+    }
+    s
+  }
+  
+  mse <- function(f,sub) mean((data[sub,"y"]-f(data[sub,"x"]))^2)
+  
+  rplot <- function(k=1,main="training set",sub=Str) {
+    x <- seq(from=-1,to=1,length.out=200)
+    lm.k <- flm(k)
+    fh <- fhat(k,lm.k)
+    plot(c(-1,1),c(-1.5,1.8),type="n",
+         xlab=expression(x),
+         ylab=expression(y),
+         main=sprintf("degree = %d %s (MSE = %.4f)",
+                      k,main,mse(fh,sub)))
+    for(i in sub) {
+      lines(c(data[i,"x"],data[i,"x"]),
+            c(data[i,"y"],fh(data[i,"x"])),col=cols[3])
+    }
+    lines(x,f(x,noise=0),col=cols[1],lty="dashed")
+    points(data[sub,],pch=19,col=cols[2])
+    lines(x,fh(x),lwd=2)
+    legend("topleft",
+           legend=c(parse(text=sprintf("hat(f)[%d](x)==%s",k,pform(lm.k$coefficients))),expression(sin(pi * x))),
+           lty=c("solid","dashed"),col=c("black",cols[1]),lwd=c(2,1))
+  }
+  
+  make2 <- function(k) {
+    par(mfrow=c(2,1))
+    rr$rplot(k,"training set",rr$Str)
+    rr$rplot(k,"test set",rr$Ste)
+  }
+  
+  list(
+    data=data,
+    Str=Str,
+    Ste=Ste,
+    flm=flm,
+    fhat=fhat,
+    pform=pform,
+    mse=mse,
+    rplot=rplot,
+    make2=make2
+  )
+}
+
+rr <- regexample()
+
+
+rr$make2(0)
+```
+
+## Polynomial degree 1
+
+
+```{r,echo=FALSE}
+rr$make2(1)
+```
+
+
+## Polynomial degree 2
+
+
+```{r,echo=FALSE}
+rr$make2(2)
+```
+
+## Polynomial degree 3
+
+
+```{r,echo=FALSE}
+rr$make2(3)
+```
+
+## Polynomial degree 4
+
+
+```{r,echo=FALSE}
+rr$make2(4)
+```
+
+## Polynomial degree 5
+
+
+```{r,echo=FALSE}
+rr$make2(5)
+```
+
+## Polynomial degree 6
+
+
+```{r,echo=FALSE}
+rr$make2(6)
+```
+
+## Summary of performance
+
+|degree|MSE (train)|MSE (test)| 
+|-----|----------------|------------| 
+|$0$|$0.3229$|$0.7150$| 
+|$1$|$0.1860$|$0.2617$| 
+|$2$|$0.0446$|$1.2808$| 
+|$3$|$0.0013$|$0.5879$|
+|$4$|$0.0012$|${\bf 0.1373}$| 
+|$5$|$0.0011$|$11.347$| 
+|$6$|${\bf 0.0000}$|$9586.9$| 
+
+* *Underfitting*: model too inflexible / too much data (poor generalization)
+* *Overfitting*: model too flexible / too little data (poor generalization)
+* *Inductive bias*: choice of hypothesis space incorporates assumptions (generalization is impossible without any assumptions!)
+
+
+
+
+## Supervised learning terminology
+
+* $x=(x_1,\ldots,x_p)$: *input variables*, or *features*, *predictors*, *covariates*, or *independent variables*.
+* $y$: *output variable*, *response*, *dependent variable*, or *class label* (in classification)
+* For now on, we focus on the following regression setting:$$y=g(x)+\epsilon,$$where $g$ is some unknown (possibly horribly complicated) function, $x$ is sampled from some arbitrary distribution, and $\epsilon$ is the *error term* that is sampled independently from a distribution that satisfies $E[\epsilon]=0$ and $E[\epsilon^2]=\sigma^2$ for some $\sigma^2$. (This defines our sampling distribution $(x,y)\sim F$!)
+* **Informal objective:** *learn* $\hat f$ that is an *estimate* of $g$.
+* **Formal objective:** find $\hat f$ that minimizes loss on new data.
+
+# Linear regression
+
+## One-dimensional ordinary least squares (OLS) linear regression
+
+* $f(x)=\beta_0+\beta_1 x$.
+   * $\beta_0$ is the *intercept*, $\beta_1$ is the *slope*.
+* Minimise empirical loss $E_{(x,y)\sim F}\left[L(\hat y,y)\right]\approx L_{emp}=\sum\nolimits_{i=1}^n{(\hat y_i-y_i)^2/n}$.
+* We can solve equations $\partial{L_{emp}}/\partial{\beta_0}=\partial{L_{emp}}/\partial{\beta_1}=0$ analytically and obtain the following expressions:
+$$
+\hat\beta_1 =\frac{\sum\nolimits_{i=1}^n{(x_i-\overline x)(y_i-\overline y)/n}}{\sum\nolimits_{i=1}^n{(x_i-\overline x)^2/n}}=\frac{\hat\sigma_{xy}}{\hat\sigma_{xx}},
+$$
+$$
+\hat\beta_0 =\overline y-\hat\beta_1\overline x,
+$$
+where $\overline x=\sum\nolimits_{i=1}^n{x_i/n}$ and $\overline y=\sum\nolimits_{i=1}^n{y_i/n}$.
+
+## OLS linear regression
+
+* Useful trick (makes equations simpler):
+  - include to data a dummy input variable of all ones. This will be the intercept
+  - i.e., if you have $p$ dimensional data $x_i=(x_{i1},\ldots,x_{ip})\in{\mathbb{R}}^p$ replace it by $p+1$ dimensional data $x_i'=(1,x_{i1},\ldots,x_{ip})\in{\mathbb{R}}^{p+1}$!
+  - This makes *affine* function $f(x)=\beta^Tx+\beta_0$ *linear* $f(x')=\beta'^Tx'$, where $\beta'=(\beta_0,\beta_1,\ldots,\beta_p)$.
+* From now on we therefore mostly present everything for linear functions (instead of affine)
+  - In practice this means adding a column of ones to the data matrix
+
+## Multivariate OLS linear regression
+
+
+* Matrix ${\bf{X}}\in{\mathbb{R}}^{n\times p}$ has $n$ instances $x_i$ as its rows and $y\in{\mathbb{R}}^n$ contains the corresponding output variables $y_i$.
+* Terminology: ${\bf X}$ is the *design matrix*
+* Assume that the data has been generated by $$y={\bf{X}}\beta+\epsilon,$$where the *residual* $\epsilon\in{\mathbb{R}}^n$ are i.i.d. variables with zero mean and variance of $\sigma^2$.
+* *Optimization problem:* Find $\hat\beta$ such that loss $L(\hat\beta)=\hat\epsilon^T\hat\epsilon$ is minimised, where $\hat\epsilon=y-{\bf{X}}\hat\beta$.
+
+
+## Multivariate OLS linear regression
+
+
+* Can be solved, e.g., by using derivatives, by setting $\partial L/\partial \beta_j=0$.
+* Denote by ${\bf A}^{-1}$ the inverse of square matrix ${\bf A}$, i.e., ${\bf A}{\bf A}^{-1}={\bf 1}$. The solution is then $\hat\beta=({\bf X}^T{\bf X})^{-1}{\bf X}^Ty$.
+* If columns of ${\bf X}$ are linearly independent ${\bf X}^T{\bf X}$ is of full rank and has an inverse
+  - True for $n\ge p$ except for degenerate special cases
+* ${\bf X}^T{\bf X}\in{\mathbb{R}}^{p\times p}$, inverting takes $O(p^3)$ time [or $O(p^{2.373})$ if we nit-pick]
+  - May be unfeasible for very high-dimensional problems 
+  - You should usually not deal with matrices directly but use OLS software libraries instead (e.g., `lm` in R)
+  
+  
+  
+## Nonlinear models by transforming the input
+
+
+* *Linear* regresion can be used to fit models which are *nonlinear* functios of the input
+* Example: For fitting a degree 3 polynomial $$f(x_i)=\beta_0+\beta_1x_i+\beta_2x_i^2+\beta_3x_i^3$$create the input matrix$${\bf X}=\left(
+\begin{array}{cccc}
+1 &x_1&x_1^2&x_1^3\\
+1 &x_2&x_2^2&x_2^3\\
+1 &x_3&x_3^2&x_3^3\\
+\vdots&\vdots&\vdots&\vdots
+\end{array}\right).$$ 
+
+## Nonlinear models by transforming the input
+* We can also explicitly include *interaction terms*, as in$$f(x_i)=\beta_0+\beta_1x_{i1}+\beta_2x_{i2}+\beta_3x_{i1}x_{i2}$$using the following matrix
+$${\bf X}=\left(
+\begin{array}{cccc}
+1 &x_{11}&x_{12}&x_{11}x_{12}\\
+1 &x_{21}&x_{22}&x_{21}x_{22}\\
+1 &x_{31}&x_{32}&x_{31}x_{32}\\
+\vdots&\vdots&\vdots&\vdots
+\end{array}\right).$$
+
+
+
+
+## Polynomial degree 4
+
+```{r}
+data <- rr$data[rr$Str,]
+```
+
+```{r,echo=TRUE,size="tiny"}
+data.fit <- lm(y ~ poly(x,4,raw=TRUE),data)
+summary(data.fit)
+```
+
+## Polynomial degree 4
+
+```{r}
+plot(rr$data,type="n",xlab=expression(x),ylab=expression(y))
+x <- seq(from=min(rr$data[,"x"]),to=max(rr$data[,"x"]),length.out=200)
+lines(x,sin(pi*x),lty="dotted")
+points(rr$data[rr$Str,],pch=19)
+points(rr$data[rr$Ste,],pch=1)
+legend("topleft",legend=c("training set","test set",
+                          parse(text=sprintf("hat(f)(x)==%s",rr$pform(data.fit$coefficients))),
+                          expression(sin(pi*x))),
+       pch=c(19,1,NA,NA),lty=c(NA,NA,"solid","dotted"))
+lines(x,predict(data.fit,data.frame(x=x)))
+```
+
+
+
+# Estimating model parameters
+
+## Estimators and their key properties
+
+
+* In machine learning we try to compute unknown quantities (denoted here by $\beta$) based on observed data by using statistical *estimators* (denoted here by $\hat\beta$)
+* Examples:
+    - estimating regression coefficients $\hat\beta$ by OLS linear regression, "true" value being $\beta$
+    - estimating loss by empirical loss $L_{emp}=\sum\nolimits_{i=1}^n{L(y_i,\hat f(x_i))/n}$, "true" loss being $E_{(x,y)\sim F}[L(y,\hat f(x))]$.
+* Important properties of estimators:
+    * ${\rm{bias}}=E[\hat\beta]-\beta$.
+        - The estimator is *unbiased* if ${\rm{bias}}=0$
+    * ${\rm{variance}}=E[(\hat\beta-E(\hat\beta))^2]$.
+    * ${\rm{MSE}}=E[(\hat\beta-\beta)^2]={\rm{bias}}^2+{\rm{variance}}$.
+
+
+
+## Consistent estimators
+
+Estimator is *consistent* if it produces a true value at the limit of infinite data. 
+
+Many of the estimates we would like to use in machine learning are consistent. This means that if we have very large data then the "statistical learning" will just be "learning". For example, the empirical estimate of loss is typically consistent estimator of the true loss (at the loss function $L()$ is well-behaving etc.), i.e.,
+$$
+\lim\nolimits_{n\rightarrow\infty}{L_{emp}}=
+\lim\nolimits_{n\rightarrow\infty}{\sum\nolimits_{i=1}^n{L(y_i,\hat y_i)/n}}=
+E_{(x,y)\sim F}\left[L(y,\hat y)\right].
+$$
+Then machine learning problem reduces just to optimising the empirical loss, without need for any further statistical considerations.
+
+## Estimating mean and empirical loss of the mean estimate
+
+* Consider problem of estimating mean of $n$ data points $y_1,\ldots,y_n$.
+* Assume the data comes from a fixed but unknown distribution with "true" mean $\beta=E[y]$ and variance $\sigma^2=E[(y-\beta)^2]$.
+* Estimate the mean by empirical mean: $\hat\beta=\sum\nolimits_{i=1}^n{y_i/n}$
+    * The estimator is unbiased: $E[\hat\beta]=\sum\nolimits_{i=1}^n{E[y_i]/n}=\beta$ (because $y_i$ comes from $F$ which has mean of $\beta$, i.e., $E[y_i]=\beta$)
+* Estimate MSE $\sigma^2=E[(y-\beta)^2]$ by empirical loss: $L_{emp}=\sum\nolimits_{i=1}^n{(y_i-\hat\beta)^2/n}$
+    * The estimator is biased: $E[L_{emp}]=E[\sum\nolimits_{i=1}^n{(y_i-\hat\beta)^2/n}]=(1-1/n)\sigma^2$.
+    * ${\rm{bias}}=E[L_{emp}]-\sigma^2=-\sigma^2/n$.
+    * More generally: empirical loss tends to underestimate the generalisation loss!
+    
+
+
+## Parametric estimation of confidence interval
+
+The most important special case is given by $t$ statistics. The t-statistics is given by the value of the statistics (e.g., estimate $\hat\beta$ normalised by its standard deviation), i.e.,
+$$
+t=\hat\beta/{\rm{sd}}(\hat\beta),
+$$
+where 
+$$
+{\rm{sd}}(\hat\beta)
+=\sigma/\sqrt{n}.
+$$
+
+
+If the data is normally distributed then the 95% confidence interval is given by $\pm 1.96\times{\rm{sd}}(\hat\beta)$, corresponding to $-1.96\le t\le 1.96$.
+
+**Caution:** be extra careful in interpreting your parameter estimates if the underlying assumptions are not obeyed (e.g., variables heteroscedastic, residuals $\epsilon_i$ correlated, $g$ clearly non-linear, outliers).
+
+## Boston housing data
+
+
+
+```{r,echo=TRUE,size="tiny"}
+library(MASS)
+boston.fit <- lm(medv ~ crim, data = Boston)
+summary(boston.fit)
+```
+
+## Boston housing data
+
+
+```{r}
+cols <- c("#E41A1C","#377EB8","#4DAF4A")
+plot(Boston[,c("crim","medv")])
+abline(a=boston.fit$coefficients["(Intercept)"],boston.fit$coefficients["crim"],
+       lwd=2,col=cols[1],main="Boston housing data")
+legend("topright",legend=parse(text=sprintf("hat(f)(crim)==%.3f%+.3f %%*%% crim",
+                                            boston.fit$coefficients["(Intercept)"],
+                                 boston.fit$coefficients["crim"])),
+       lwd=2,lty="solid",col=cols[1])
+```
+
+## Boston housing data: diagnostic plots
+
+```{r,echo=TRUE,eval=FALSE}
+plot(boston.fit)
+```
+
+```{r}
+par(mfrow=c(2,2)) # Change the panel layout to 2 x 2
+plot(boston.fit)
+```
+
+
+# Estimating loss: evaluation of model performance
+
+## How good is my model? Which model to choose?
+
+* Apply the supervised learning model to the training data
+  - simpler model may not fit the data perfectly
+  - more flexible model typically fits the data better
+  - in particular, *nested* model such as polynomials of increasing order, a more complex model always fits the training data better
+* Questions:
+  - How can we estimate the loss on new data?
+  - What is the correct model flexibility (=gives smallest loss on new data)?
+  - Is there a way to regulate the flexibility of the model and/or insert prior knowledge (*regularization*)?
+
+
+## What really is the meaning of the loss function?
+
+* *Loss function* $L(y,\hat y)$: How much does it "cost" us if we predict $\hat y$ when the true outcome is $y$?
+* *Squared error* in regression: $L(y,\hat y)=(y-\hat y)^2$
+* *Zero-one loss* in classification:$$L(y,\hat y)=\left\{\begin{array}{lcl}
+0&,&\hat y=y\\1&,&\hat y\neq y
+\end{array}
+\right.$$
+* *Asymmetric loss*: $$L(y,\hat y)=\left\{\begin{array}{lcl}
+0&,&\hat y=y\\a&,&\hat y=1\wedge y=0\\b&,&\hat y=0\wedge y=1\\
+\end{array}
+\right.$$
+* In probabilistic case using log-loss leads to Bayesian modeling
+$$L(y,\hat p)=-\log{\hat p(y)}\ge 0$$
+* Often, when minimising the actual loss is hard, me can use *surrogate loss* that is similar to the actual loss but easier to manipulate (e.g., SVMs)
+
+## How to choose the loss function?
+
+* **Classification example:** assume you have a medical classifier that classifies people  $y\in\{{\rm healthy},{\rm sick}\}$ based on some covariates in $x$. What is good loss?
+     * *zero-one loss* "cost" of misclassification is the same for both healthy and sick people
+     * *asymmetric loss*: typically cost of misclassification differs for classes (e.g., false positive might result harmless extra investigations, but false negative might mean missing a serious illness)
+* **Regression example:** how much should you penalise outliers, i.e., how strongly should outliers affect your regression model? 
+* The expected loss $E[L(y,\hat y)]$ is sometimes called *risk* and the loss $L(y,\hat y)$ *utility*.
+
+
+## Losses for regresion tasks
+
+
+![](natekin_etal_2013_fig1.png)
+
+
+
+## Statistical learning model
+
+
+
+* We have fixed but unknown probability distribution $F$ from which data points $(x,y)$ are drawn independently
+    * We say that the data points are *independent and identically distributed* (i.i.d.)
+* We wish to minimise the *generalisation error* (sometimes called *risk*) of $\hat f$, which is the expected loss$$E_{(x,y)\sim F}\left[L(y,\hat f(x))\right]$$
+    * $E_{(x,y)\sim F}[\Box]$ denotes the expectation of $\Box$ when a single data point $(x,y)$ is drawn from $F$.
+* If $F$ was known this would just be an optimization problem:
+$$ \min\nolimits_{\hat f}{E_{(x,y)\sim F}\left[L(y,\hat f(x))\right]}.$$
+* This problem could be very hard to solve, but it would not be a statistical problem.
+* Since $F$ is unknown, *learning* comes into picture.
+
+
+
+
+## Statistical learning model: empirical loss
+
+
+* If we have training data drawn from $F$ we can infer something of the properties of $F$.
+* In particular, based on the law of large numbers, the average loss is with high probability close to the expected loss:
+$$\sum\nolimits_{i=1}^n{L(\hat f(x_i),y_i)/n}\approx E_{(x,y)\sim F}\left[L(\hat f(x),y)\right].$$
+* ...but what if there are many possible models $\hat f$?
+* Recall: if we find the model by minimising the empirical loss then the empirical loss (on the training set) tends to underestimate the true loss!
+
+## Tragedy of many models
+
+
+* We have to predict a sequence of 10 binary numbers
+* Assume our models are totally random, i.e., like flipping a coin
+* Assume that we have 50 models to choose from
+* Probability that a single model gets 8 out of 10 numbers right:
+$$
+\frac{\binom{10}{8} + \binom{10}{9} + \binom{10}{10}}{2^{10}} \approx 0.0547
+$$
+* Probability that at least one of them gets at least 8 correct guesses:
+$$
+1 - (1-0.0547)^{50} \approx 0.9399
+$$
+
+## Tragedy of many models
+
+
+* The moral of the story: If you are comparing a number of random predictors, it is likely that *some* will have very good empirical performance *even if they are all quite random.*
+* While the training set performance is related to generalization, one should not expect similar test set performance unless one tests the model on a fresh dataset *after selection*
+* **The bigger the set of models to choose from, the worse it gets.**
+
+## Overfitting
+
+
+* Overfitting means creating models that follow too closely the specifics of the training data, resulting in poor performance on unseen data
+* Overfitting often results from using too flexible models with too little data
+  - flexible models allow high accuracy but require lots of data to train
+  - simple models require less training data but are incapable of modelling complex phenomena accurately
+* Choosing the right model flexibility is a difficult problem for which there are many methods (incl. cross validation)
+
+## What is model flexibility? 
+
+
+* The simplest case is the one where the number of models available is finite
+* For *parametric* models the number of parameters can be used to obtain a measure of complexity (e.g., linear model in $p$ dimensions, degree $k$ polynomial, etc.)
+* Some non-parametric models also have intuitive complexity measures (e.g., based on the number of nodes in decision tree)
+* There are also less obvious parameters that can be used to control overfitting (e.g., kernel width, parameter k in kNN, norm of coefficient vector in linear model) - *regularization*
+* Mathematical study of various formal notions of complexity is a vast field; we’ll scratch the surface
+
+
+
+## Loss vs. flexibility (train and test)
+
+
+* Typical behaviour: The higher the model complexity (more flexible model) the lower the error on the training sample. However, the error curve for a test sample is U-shaped. (Fig. from Hastie et al. 2009)
+
+![](errorComplexityESL.png)
+
+## Bias-variance tradeoff
+
+
+* Based on $n$ training datapoints from the distribution, how close is the learned classifier to the optimal classifier?
+* Consider multiple trials: repeatedly and independently drawing N training points from the underlying distribution.
+  - Bias: how far the average model (over all trials) is from the real optimal classifier
+  - Variance: how far a model (based on an individual training set) tends to be from the average model
+* Goal: Low bias and low variance.
+* High model complexity: low bias and high variance 
+* Low model complexity: high bias and low variance
+
+## Bias-variance tradeoff for regression
+
+
+* Here expectation is over drawing of $n$ training data points
+* Assume model $y(x)=f(x)+\epsilon$, where $\epsilon$ is independent random variable with $E[\epsilon]=0$ and $E[\epsilon^2]=\sigma^2$. (From now on just write $f(x)\rightarrow f$ etc.)
+* $\hat f$ depends on the training data, $f$ is a constant under resampling of training data
+$$ E[(y-\hat f)^2]=E[(f+\epsilon-\hat f)^2]=E[(f-\hat f)^2]+\sigma^2,$$
+(The cross term vanishes due to independence of $\epsilon$ and $E[\epsilon]=0$.)
+* We can further decompose the MSE loss as 
+$$ E[(y-\hat f)^2]={\rm{Bias}}(\hat f)^2+{\rm{Var}}(\hat f)+\sigma^2,$$
+where ${\rm{Bias}}(\hat f)=f-E[\hat f]$ and ${\rm{Var}}(\hat f)=E[(\hat f-E[\hat f])^2]$.
+* *bias* measures how much we are consistently off the target
+* *variance* measures how much the prediction wanders around the target
+
+## How to deal with this in practice
+
+
+* Split the data in random, e.g., as follows:
+  - training set 50%
+  - validation set 25%
+  - test set 25%
+* Train the model of different complexities on training set
+* Pick a model complexity that gives smallest validation set loss
+* Train the model on combined training and validation set. Report test set loss.
+
+## Example
+
+
+* We have 20 points from the sinusoidal curve data set 
+* Split the data in random to training (10), validation (5), and test (5) sets.
+Train regressors on various polynomial degrees training set. Use root-mean square loss.
+
+|model (degree) |loss (training)|loss (validation)| 
+|-----|----------------|------------| 
+|$0$|$0.492$|$0.644$|
+|$1$|$0.091$|$0.125$|
+|$2$|$0.090$|$0.137$|
+|$3$|$0.044$|${\bf 0.041}$|
+|$4$|$0.044$|$0.049$|
+|$5$|$0.042$|$0.142$|
+|$6$|$0.030$|$18.820$|
+|$7$|$0.025$|$181.850$|
+|$8$|$0.024$|$34.014$|
+|$9$|$0$|$10^9$|
+
+## Example
+
+
+* Choose degree 3 for which the validation set loss is smallest.
+* Train degree 3 polynomial on 15 points (training + validation set) and report the loss on the test set
+
+|model (degree) |loss (training+validation)|loss (test)| 
+|-----|----------------|------------| 
+|$3$|$0.0378$|$0.0594$|
+
+* If we would like to make predictions we should probably train on all 20 points (training + validation + test set)
+* Training with all 20 points in fact would give a slightly smaller loss of $0.0557$ on 80 newly sampled data points
+* The same principle applies for any supervised learning method (regression tree, SVM etc.)
+* NB: We assume here data is i.i.d. What happens if it is not?
+
+## How do the losses behave?
+
+
+```{r,echo=FALSE,fig.height=4}
+par(mfrow=c(1,2))
+plot(c(0,1),c(0,1),type="n",xlab="model complexity",ylab="loss",xaxt="n",yaxt="n")
+x <- 0:200/200
+lines(x,pmax(0,0.5*exp(-5*x)-.01),lty="solid")
+lines(x,.1+2*(x-.5)*(x-.5)*exp(x/2),lty="dashed")
+legend(x="topright",legend=c("test set","training set"),lty=c("dashed","solid"),bg="white")
+
+plot(c(0,1),c(0,1),type="n",xlab="training set size",ylab="loss",xaxt="n",yaxt="n")
+x <- 0:200/200
+lines(x,pmax(0,.3-exp(-5*x)),lty="solid")
+lines(x,.3+exp(-5*x),lty="dashed")
+legend(x="topright",legend=c("test set","training set"),lty=c("dashed","solid"),bg="white")
+```
+
+* empirical loss = loss on training set
+* generalization loss = loss on test set
+* We see empirical loss, but want to minimize the loss on new data.
+
+## Validation
+
+
+* Question 1: What is the correct model complexity?
+  - divide the data into training and validation sets. Choose model complexity that has the smallest error on the validation set.
+* Question 2: What is the generalization error?
+  - divide the data into training and test sets. The generalization error is approximately the error on the test set.
+* To answer both questions: divide the data into training, validation, and test sets.
+* There are more efficient methods, such as cross-validation.
+
+
+
+## Cross-validation
+
+* To have more training data points than a single "split" provides we can use $k$-fold cross validation
+  - Divide the data into $k$ equal-sized subsets in random
+  - For all $j\in\{1,\ldots,k\}$: Train the model using all data except that of subset $j$ and compute the estimate $\hat y_{cv}$ for the subset $j$.
+  - Compute the validation loss using $\hat y_{cv}$.
+* If $k=n$ this is *leave-one-out cross-validation* (LOOCV).
+* We should still use a separate test set!
+
+## Cross-validation
+
+```{r,hide=TRUE}
+set.seed(42)
+
+makeloss <- function(data,class,model=lm,k=10,split=kpart(nrow(data),k)) {
+  function(r) {
+    if(length(r)==0) {
+      mean((data[,class]-mean(data[,class]))^2)
+    } else {
+      yhat <- cv(data=data[,c(class,r),drop=FALSE],class=class,
+                 model=model,split=split) 
+      mean((yhat-data[,class])^2)
+    }
+  }
+}
+        
+kpart <- function(n,k,random=TRUE) {
+  p <- if(random) sample.int(n) else 1:n
+  s <- floor(seq(from=0,to=n,length.out=k+1))
+  mapply(function(i,j) p[i:j],s[1:k]+1,s[2:(k+1)],SIMPLIFY=FALSE)
+}
+
+cv <- function(data,class,model=lm,k=10,split=kpart(nrow(data),k)) {
+  f <- function(itr,iva) {
+    predict(model(formula(sprintf("%s ~ .",class)),data[itr,,drop=FALSE]),
+            newdata=data[iva,,drop=FALSE])
+  }
+  yhat <- data[,class]
+  for(iva in split) {
+    yhat[iva] <- f(setdiff(1:nrow(data),iva),iva)
+  }
+  yhat
+}
+
+fsel <- function(loss,s,v=c(),r=c(),stopat=0) {
+  if(length(v)==0) v <- loss(r)
+  while(length(s)>stopat) {
+    a <- sapply(s,function(si) loss(c(r,si)))
+    i <- which.min(a)
+    v <- c(v,a[i])
+    r <- c(r,s[i])
+    s <- s[-i]
+  }
+  v
+}
+ 
+bsel <- function(loss,s,v=c(),r=c(),stopat=0) {
+  v <- rev(fsel(function(r) loss(setdiff(s,r)),s,v=v,r=r,stopat=stopat))
+  names(v)[-1] <- names(v)[-length(v)]
+  names(v)[1] <- ""
+  v
+}
+
+Boston100 <- Boston[sample.int(nrow(Boston),100),]
+Boston100 <- Boston100[order(Boston100[,"lstat"]),]
+x <- seq(from=Boston100[1,"lstat"],to=Boston100[nrow(Boston100),"lstat"],length.out=256)
+
+loss <- makeloss(data=Boston100,class="medv")
+Boston100cols <- colnames(Boston100)[1:13]
+```
+
+```{r}
+plot(range(Boston100[,"lstat"]),c(0,70),xlab="lstat",ylab="medv",type="n")
+points(Boston100[,c("lstat","medv")])
+##lines(Boston100[,c("lstat","medv")],lty="dotted")
+lines(x,predict(lm(medv ~  lstat+I(lstat^2),Boston100),
+                newdata=data.frame(lstat=x)))
+points(Boston100[,"lstat"],
+       cv(data.frame(Boston100[,c("medv","lstat")],lstat2=Boston100$lstat^2),"medv"),pch=15)
+legend("topright",c("data",expression(hat(y)==beta[0]+beta[1] %*% lstat + beta[2] %*% lstat^2),expression(hat(y)[cv])),
+       pch=c(1,NA,15),lty=c(NA,"solid",NA))
+```
+
+
+
+
+## Imagenet
+
+![Imagenet](imagenet.png)
+
+Krizhevsky et al. (2012) ImageNet Classification with Deep Convolutional
+Neural Networks. In Proc NIPS 2012.
+
+# Controlling the model complexity
+
+## How to adjust model complexity in (linear) regression?
+
+* feature selection (applicable to all supevised learning models!)
+* regularization (shrinkage)
+  - ridge regression
+  - lasso
+
+## Feature selection
+
+* One way to regulate model flexibility is to choose features (less features = less flexible model)
+* Naive algorithm: Given number of features $k$, find a subset of features of size $k$, train a regressor for these features, compute (cross-)validation loss, choose the smallest loss.
+* Problem: there are too many subsets, running time $O(p^k)$.
+    * subset-selection problem is NP-hard, i.e., fast exact algorithm not likely to exist for large problems.
+* **forward selection**: greedy heuristic, running time $O(pk)$.
+    * choose feature that gives the smallest (cross-)validation loss
+    * add a feature which (added to previously chosen features) gives smallest (cross-)validation loss
+    * iterate until you have k features
+* **backward selection**: start from all features, drop them one by one.
+
+## Forward selection
+
+```{r}
+## full Boston data, 506 rows
+## subset of Boston data, 50 rows
+
+ 
+
+fselplot <- function(v,...) {
+  plot(c(0,length(v)-1),c(0,max(v)),type="n",
+       xlab="# of features",ylab="CV loss",...)
+  points(0:(length(v)-1),v)
+  lines(0:(length(v)-1),v)
+  for(i in 2:length(v)) {
+    text(i-1,v[i],labels=names(v)[i],pos=3,srt=90)
+  }
+  i <- which.min(v)
+  points(i-1,v[i],col="red",pch=19)
+  text(i-1,v[i]-10,labels=sprintf("%.2f",v[i]),col="red",pos=1)
+}
+
+v.fs <- fsel(loss,Boston100cols)
+fselplot(v.fs,main="forward selection")
+```
+
+## Backward selection
+
+```{r}
+v.bs <- bsel(loss,Boston100cols)
+fselplot(v.bs,main="backward selection")
+````
+
+## Regularization: Ridge regression and Lasso
+
+
+* Feature subset selection is one way to control the complexity of the model
+* We can also "softly" punish more complex models
+* Observation: badly overfitting linear models often have large regression coefficients!
+* Idea: we can constrain allowed models "softly" by punishing large regression coefficients.
+  - increase bias
+  - decrease variance
+  
+  
+## Bayesian regularization
+
+The joint probability distribution can be defined, e.g., as
+$$
+p(X,Y,\beta)=p(Y\mid X,\beta)p(X)p(\beta),
+$$
+where the likelihood is, e.g., $p(Y\mid X,\beta)\propto \exp{(-(Y-X\beta)^T(Y-X\beta)/(2\sigma^2))}$ and prior of $\beta$, e.g., $p(\beta)\propto\exp{(-\beta^T\beta/(2\sigma_P^2))}$.
+
+* maximum-likelihood (ML) solution ("normal" OLS regression): $$
+\hat\beta_{ML}=\arg\max\nolimits_{\beta}{p(Y,X\mid \beta)}
+=\arg\min\nolimits_\beta{\sum\nolimits_{i=1}^n{(\beta^Tx_i-y_i)^2}}.
+$$
+* maximum-a-posteriori (MAP) solution (Ridge regression with $\lambda_{ridge}=\sigma^2/\sigma_P^2$!): $$\begin{split}
+\hat\beta_{MAP}=\arg\max\nolimits_{\beta}{p(\beta\mid X,Y)}
+=\arg\max\nolimits_{\beta}{p(Y\mid X,\beta)p(\beta)/p(Y)}\\
+=\arg\min\nolimits_\beta{\left(\sum\nolimits_{i=1}^n{(\beta^Tx_i-y_i)^2+\sigma^2/\sigma_P^2\sum\nolimits_{j=0}^p{\beta_j^2}}\right)}.
+\end{split}
+$$
+
+## Bayesian regularization (addendum)
+
+Here the data set is composed of the vector of dependent variables $Y\in{\mathbb{R}}^n$ and the design matrix $X\in{\mathbb{R}}^{n\times p}$. $\beta\in{\mathbb{R}}^p$ is the parameter vector. 
+
+We can then write $$P(Y\mid X,\beta)=\prod\nolimits_{i=1}^n{p(y_i\mid x_i,\beta)}$$.
+
+Notice that $\arg\max\exp{(-A)}=\arg\min A$. We often write likelihoods as sums of logarithms that we minimize instead of products of exponents which we maximize.
+
+The terms $P(X)$ or $p(Y)$ do not depend on the parameter $\beta$ and have therefore no effect on optimisation.
+
+## Regularization: Ridge regression and Lasso
+
+
+* Define new loss by $$ L(\beta)=
+\sum\nolimits_{i=1}^n{\epsilon_i^2}+
+\lambda_{ridge}\sum\nolimits_{j=1}^p{\beta_j^2}+
+\lambda_{lasso}\sum\nolimits_{j=1}^p{|\beta_j|},$$where $\epsilon_i=y_i-\beta^Tx_i$ and solve $\hat\beta=\arg\min\nolimits_{\beta}{L(\beta)}$.
+* If $\lambda_{ridge}=\lambda_{lasso}=0$ we have *OLS regression*
+* If $\lambda_{ridge}>0$ we have *ridge regression*
+* If $\lambda_{lasso}>0$ we have *lasso regression*
+* Surprisingly, it seems to work
+* Lasso leads to sparse solutions (= some coefficients in $\beta$ are zero)
+* Recall: ridge (lasso) is actually MAP estimate of some Bayesian model!
+* Choose best $\lambda_{ridge}$ or $\lambda_{lasso}$ by cross-validation!
+
+
+## Regularization: Ridge (glmnet)
+
+```{r}
+Boston50 <- Boston[sample.int(nrow(Boston),50),]
+cvfit <- cv.glmnet(as.matrix(Boston50[,1:13]),Boston50[,14],alpha=0)
+plot(cvfit)
+```
+
+## Regularization: Ridge (glmnet)
+
+
+```{r}
+coef(cvfit, s = "lambda.min")
+```
+
+
+## Regularization: Lasso (glmnet)
+
+
+```{r}
+cvfit <- cv.glmnet(as.matrix(Boston50[,1:13]),Boston50[,14],alpha=1)
+plot(cvfit)
+```
+
+
+
+## Regularization: Lasso (glmnet)
+
+
+```{r}
+coef(cvfit, s = "lambda.min")
+```
+
+## No regularization: OLS
+
+```{r,size="tiny"}
+summary(lm(medv ~ .,Boston50))
+```
+
+
+
